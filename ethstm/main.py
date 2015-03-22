@@ -21,15 +21,20 @@ of multiple interacting smart contracts.
 def main(args = sys.argv[1:]):
     opts = parse_args(args)
 
+    success = True
     for source in opts.SOURCE:
-        trans = StateTestTranslator()
+        logging.info('Processing {!r}'.format(source))
+        trans = StateTestTranslator(os.path.dirname(source))
         with file(source, 'r') as f:
             jsonin = json.load(f)
 
         jsonout = trans(jsonin)
         txtout = json.dumps(jsonout, sort_keys=True, indent=2)
 
-        run_tester(opts.TEST_RUNNER, txtout)
+        result = run_tester(opts.TEST_RUNNER, txtout)
+        success = success and result
+
+    raise SystemExit(0 if success else 1)
 
 
 def parse_args(args):
@@ -75,7 +80,7 @@ class SchemaError (Exception): pass
 
 @curry_log
 class StateTestTranslator (object):
-    def __init__(self, log):
+    def __init__(self, log, sourcedir):
         self._log = log
 
         # Consistent parsing state:
@@ -90,14 +95,15 @@ class StateTestTranslator (object):
 
             fields = src.split(':', 1)
             if len(fields) == 2:
-                prefix, body = fields
+                prefix, param = fields
                 if prefix == 'hex':
-                    return '0x' + body
+                    return '0x' + param
                 elif prefix == 'compile':
-                    result = self._bytecodes.get(body)
+                    result = self._bytecodes.get(param)
                     if result is None:
-                        result = eth_compile(body)
-                        self._bytecodes[body] = result
+                        path = os.path.join(sourcedir, param)
+                        result = eth_compile(path)
+                        self._bytecodes[param] = result
                     return result
                 else:
                     raise SchemaError('Unknown data field prefix: {!r}'.format(prefix))
@@ -117,7 +123,7 @@ class StateTestTranslator (object):
                             name, src, pat))
             return parser
 
-        Address   = rgx_field('Address',   r'[0-9a-f]{40}')
+        Address   = rgx_field('Address',   r'|[0-9a-f]{40}')
         SecretKey = rgx_field('SecretKey', r'[0-9a-f]{64}')
         UInt      = rgx_field('UInt',      r'\d+')
 
@@ -209,7 +215,9 @@ def run_tester(log, runner, statetest):
         f.write(statetest)
         f.seek(0)
 
-        subprocess.check_call([runner], stdin=f)
+        status = subprocess.call([runner], stdin=f)
+        log.info('State Test runner exited with {!r}'.format(status))
+        return status == 0
 
 
 
